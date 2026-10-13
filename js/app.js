@@ -45,6 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // LOGIN VIEW
 // =====================================================
 function renderLoginView() {
+  warmUpServer('pub');
   root.innerHTML = `
     <div class="center-screen">
       <div class="login-wrap">
@@ -252,13 +253,39 @@ async function loadKartuSaya() {
       <button class="btn btn-secondary btn-block" id="btn-unduh-kartu">⬇ Unduh PDF</button>
     </div>
 
+    <div id="kartu-pdf-viewer-box" class="card hidden mb-md" style="padding:var(--space-sm)">
+      <iframe id="kartu-pdf-viewer" class="pdf-preview-frame" style="aspect-ratio:auto;height:70vh" title="Pratinjau Kartu Peserta"></iframe>
+    </div>
+
     <div class="card text-sm text-secondary">
       Kartu ini otomatis diberi catatan kehadiran sebelum ditampilkan/diunduh. Tunjukkan ke Pembina Ekstra untuk discan sebagai bukti kehadiran.
     </div>
   `;
 
-  document.getElementById('btn-lihat-kartu').onclick = () => openOrDownloadKartu('view');
+  document.getElementById('btn-lihat-kartu').onclick = () => toggleKartuPreview();
   document.getElementById('btn-unduh-kartu').onclick = () => openOrDownloadKartu('download');
+}
+
+let _kartuPreviewUrl = null;
+
+async function toggleKartuPreview() {
+  const box = document.getElementById('kartu-pdf-viewer-box');
+  const btn = document.getElementById('btn-lihat-kartu');
+  const isOpen = !box.classList.contains('hidden');
+
+  if (isOpen) {
+    box.classList.add('hidden');
+    btn.textContent = '👁 Lihat Kartu';
+    return;
+  }
+
+  if (_kartuPreviewUrl) {
+    box.classList.remove('hidden');
+    btn.textContent = '✕ Tutup Pratinjau';
+    return;
+  }
+
+  await openOrDownloadKartu('view');
 }
 
 async function openOrDownloadKartu(mode) {
@@ -271,13 +298,18 @@ async function openOrDownloadKartu(mode) {
     const blob = await stampPdfWithNotice(base64, notice);
     const url = URL.createObjectURL(blob);
     if (mode === 'view') {
-      window.open(url, '_blank');
+      _kartuPreviewUrl = url;
+      const box = document.getElementById('kartu-pdf-viewer-box');
+      document.getElementById('kartu-pdf-viewer').src = url;
+      box.classList.remove('hidden');
+      document.getElementById('btn-lihat-kartu').textContent = '✕ Tutup Pratinjau';
+      box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } else {
       const a = document.createElement('a');
       a.href = url; a.download = fileName;
       document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
     }
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
   } catch (e) {
     showToast('Gagal memproses PDF: ' + e.message, 'error');
   }
@@ -328,7 +360,7 @@ function renderAdminShell(role) {
       <div class="main-area">
         <div class="topbar">
           <div class="topbar-title" id="topbar-title">Dashboard</div>
-          <button class="btn btn-outline btn-sm hidden" id="btn-logout-admin-mobile">🚪 Keluar</button>
+          <button class="icon-btn" id="btn-refresh" title="Segarkan data (abaikan cache)">⟳</button>
         </div>
         <div class="content-area" id="admin-content"></div>
       </div>
@@ -342,11 +374,33 @@ function renderAdminShell(role) {
   `;
 
   document.getElementById('btn-logout-admin').onclick = logout;
+  document.getElementById('btn-refresh').onclick = () => hardRefreshSection(role);
   document.querySelectorAll('[data-nav]').forEach(btn => {
     btn.onclick = () => navigateAdmin(btn.dataset.nav, role);
   });
 
   navigateAdmin('dashboard', role);
+}
+
+const SECTION_CACHE_MAP = {
+  dashboard: { key: 'dashboard', action: 'adminDashboard' },
+  siswa:     { key: 'siswaList', action: 'adminListSiswa' },
+  akun:      { key: 'akunSiswa', action: 'adminListAkunSiswa' },
+  laporan:   { key: 'laporan', action: 'adminLaporan' }
+};
+
+async function hardRefreshSection(role) {
+  const section = appState.currentSection || 'dashboard';
+  const map = SECTION_CACHE_MAP[section];
+  const btn = document.getElementById('btn-refresh');
+  if (btn) btn.textContent = '…';
+  if (map) {
+    const res = await api(map.action, { _fresh: true });
+    if (res.success) SWR.write(map.key, res);
+  }
+  await navigateAdmin(section, role);
+  if (btn) btn.textContent = '⟳';
+  showToast('Data disegarkan.', 'info');
 }
 
 function setActiveNav(sectionId, label) {
@@ -356,6 +410,7 @@ function setActiveNav(sectionId, label) {
 
 function navigateAdmin(section, role) {
   role = role || Session.get().role;
+  appState.currentSection = section;
   const contentArea = document.getElementById('admin-content');
   const nav = ADMIN_NAV.find(n => n.id === section);
   setActiveNav(section, nav ? nav.label : section);
@@ -369,24 +424,30 @@ function navigateAdmin(section, role) {
 
 // -------- DASHBOARD --------
 async function renderDashboardSection(el, role) {
-  el.innerHTML = `<div class="flex items-center gap-sm text-secondary"><div class="spinner" style="width:18px;height:18px;border-width:2px"></div> Memuat ringkasan...</div>`;
-  const res = await api('adminDashboard');
-  if (!res.success) { el.innerHTML = errorBox(res.message); return; }
-  el.innerHTML = `
-    <div class="stat-grid">
-      <div class="stat-card"><div class="stat-label">Total Siswa</div><div class="stat-value">${res.totalSiswa}</div></div>
-      <div class="stat-card"><div class="stat-label">Kartu Terunggah</div><div class="stat-value">${res.totalKartu}</div></div>
-      <div class="stat-card"><div class="stat-label">Akun Aktif</div><div class="stat-value">${res.totalAkunAktif}</div></div>
-      <div class="stat-card"><div class="stat-label">Ekskul Aktif</div><div class="stat-value">${res.totalEkskul}</div></div>
-    </div>
-    <div class="card">
-      <div class="card-header"><div class="card-title">Progres Kelengkapan Kartu</div><span class="chip chip-success">${res.persenKartuSiap}% Siap</span></div>
-      <div style="height:10px;background:var(--surface-1);border-radius:999px;overflow:hidden;">
-        <div style="height:100%;width:${res.persenKartuSiap}%;background:var(--electric-blue);"></div>
+  const renderBody = (res) => {
+    if (!res.success) { el.innerHTML = errorBox(res.message); return; }
+    el.innerHTML = `
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-label">Total Siswa</div><div class="stat-value">${res.totalSiswa}</div></div>
+        <div class="stat-card"><div class="stat-label">Kartu Terunggah</div><div class="stat-value">${res.totalKartu}</div></div>
+        <div class="stat-card"><div class="stat-label">Akun Aktif</div><div class="stat-value">${res.totalAkunAktif}</div></div>
+        <div class="stat-card"><div class="stat-label">Ekskul Aktif</div><div class="stat-value">${res.totalEkskul}</div></div>
       </div>
-      <p class="text-secondary text-sm mt-md">Pantau progres unggah kartu peserta. Gunakan menu <strong>Upload Kartu</strong> untuk melengkapi sisanya.</p>
-    </div>
-  `;
+      <div class="card">
+        <div class="card-header"><div class="card-title">Progres Kelengkapan Kartu</div><span class="chip chip-success">${res.persenKartuSiap}% Siap</span></div>
+        <div style="height:10px;background:var(--surface-1);border-radius:999px;overflow:hidden;">
+          <div style="height:100%;width:${res.persenKartuSiap}%;background:var(--electric-blue);"></div>
+        </div>
+        <p class="text-secondary text-sm mt-md">Pantau progres unggah kartu peserta. Gunakan menu <strong>Upload Kartu</strong> untuk melengkapi sisanya.</p>
+      </div>
+    `;
+  };
+  if (!el.innerHTML) el.innerHTML = loadingRow('Memuat ringkasan...');
+  await SWR.load('dashboard', 'adminDashboard', {}, renderBody);
+}
+
+function loadingRow(label) {
+  return `<div class="flex items-center gap-sm text-secondary"><div class="spinner" style="width:18px;height:18px;border-width:2px"></div> ${label}</div>`;
 }
 
 function errorBox(msg) {
@@ -395,10 +456,21 @@ function errorBox(msg) {
 
 // -------- UPLOAD KARTU --------
 async function renderUploadSection(el, role) {
-  el.innerHTML = `<div class="flex items-center gap-sm text-secondary"><div class="spinner" style="width:18px;height:18px;border-width:2px"></div> Memuat data siswa...</div>`;
-  const res = await api('adminListSiswa', {});
-  if (!res.success) { el.innerHTML = errorBox(res.message); return; }
-  appState.siswaList = res.list;
+  const cached = SWR.read('siswaList');
+  if (cached && cached.data && cached.data.success) {
+    appState.siswaList = cached.data.list;
+  } else {
+    el.innerHTML = loadingRow('Memuat data siswa...');
+    const res = await api('adminListSiswa', {});
+    if (!res.success) { el.innerHTML = errorBox(res.message); return; }
+    appState.siswaList = res.list;
+    SWR.write('siswaList', res);
+  }
+
+  // Segarkan di belakang layar supaya status "sudah ada kartu" selalu akurat
+  api('adminListSiswa', { _fresh: true }).then(res => {
+    if (res.success) { appState.siswaList = res.list; SWR.write('siswaList', res); }
+  });
 
   el.innerHTML = `
     <div class="card" style="max-width:560px">
@@ -451,6 +523,8 @@ async function renderUploadSection(el, role) {
     if (res.success) {
       showToast(res.message, 'success');
       selectedFile = null; updateFilenameLabel(); fileInput.value = '';
+      const fresh = await api('adminListSiswa', { _fresh: true });
+      if (fresh.success) { appState.siswaList = fresh.list; SWR.write('siswaList', fresh); }
       renderUploadSection(el, role);
     } else {
       showToast(res.message, 'error');
@@ -469,40 +543,55 @@ function fileToBase64(file) {
 
 // -------- DATA SISWA (CRUD) --------
 async function renderDataSiswaSection(el, role) {
-  el.innerHTML = `<div class="flex items-center gap-sm text-secondary"><div class="spinner" style="width:18px;height:18px;border-width:2px"></div> Memuat data siswa...</div>`;
-  await loadSiswaList();
-  el.innerHTML = `
-    <div class="toolbar">
-      <input class="input" id="ds-search" placeholder="Cari nama / No. Induk / NISN...">
-      <div class="spacer"></div>
-      <button class="btn btn-primary" id="ds-add">+ Tambah Siswa</button>
-    </div>
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead><tr><th>Nama</th><th>No. Induk</th><th>NISN</th><th>Kelas</th><th>Ekstrakurikuler</th><th>Kartu</th><th>Akun</th><th></th></tr></thead>
-        <tbody id="ds-tbody"></tbody>
-      </table>
-    </div>
-  `;
-  renderSiswaTable(appState.siswaList);
+  el.innerHTML = loadingRow('Memuat data siswa...');
 
-  let debounce;
-  document.getElementById('ds-search').oninput = (e) => {
-    clearTimeout(debounce);
-    const q = e.target.value.toLowerCase();
-    debounce = setTimeout(() => {
-      const filtered = appState.siswaList.filter(s =>
-        s.nama.toLowerCase().includes(q) || String(s.noInduk).includes(q) || String(s.nisn).includes(q)
-      );
-      renderSiswaTable(filtered);
-    }, 300);
+  const renderShell = () => {
+    el.innerHTML = `
+      <div class="toolbar">
+        <input class="input" id="ds-search" placeholder="Cari nama / No. Induk / NISN...">
+        <div class="spacer"></div>
+        <button class="btn btn-outline" id="ds-template">⬇ Unduh Template Excel</button>
+        <button class="btn btn-outline" id="ds-import">⬆ Impor dari Excel</button>
+        <button class="btn btn-primary" id="ds-add">+ Tambah Siswa</button>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Nama</th><th>No. Induk</th><th>NISN</th><th>Kelas</th><th>Ekstrakurikuler</th><th>Kartu</th><th>Akun</th><th></th></tr></thead>
+          <tbody id="ds-tbody"></tbody>
+        </table>
+      </div>
+    `;
+    renderSiswaTable(appState.siswaList);
+
+    let debounce;
+    document.getElementById('ds-search').oninput = (e) => {
+      clearTimeout(debounce);
+      const q = e.target.value.toLowerCase();
+      debounce = setTimeout(() => {
+        const filtered = appState.siswaList.filter(s =>
+          s.nama.toLowerCase().includes(q) || String(s.noInduk).includes(q) || String(s.nisn).includes(q)
+        );
+        renderSiswaTable(filtered);
+      }, 300);
+    };
+    document.getElementById('ds-add').onclick = () => openSiswaModal(null);
+    document.getElementById('ds-template').onclick = () => downloadTemplateExcel();
+    document.getElementById('ds-import').onclick = () => openImportExcelModal(el, role);
   };
-  document.getElementById('ds-add').onclick = () => openSiswaModal(null);
+
+  await SWR.load('siswaList', 'adminListSiswa', {}, (res) => {
+    if (!res.success) { el.innerHTML = errorBox(res.message); return; }
+    appState.siswaList = res.list;
+    renderShell();
+  });
 }
 
-async function loadSiswaList() {
-  const res = await api('adminListSiswa', {});
-  if (res.success) appState.siswaList = res.list;
+async function loadSiswaList(forceFresh) {
+  const res = await api('adminListSiswa', forceFresh ? { _fresh: true } : {});
+  if (res.success) {
+    appState.siswaList = res.list;
+    SWR.write('siswaList', res);
+  }
 }
 
 function renderSiswaTable(list) {
@@ -582,7 +671,7 @@ function openSiswaModal(siswa) {
     if (res.success) {
       showToast(res.message, 'success');
       overlay.remove();
-      await loadSiswaList();
+      await loadSiswaList(true);
       renderSiswaTable(appState.siswaList);
     } else {
       showToast(res.message, 'error');
@@ -613,7 +702,7 @@ function confirmDeleteSiswa(noInduk) {
     overlay.remove();
     if (res.success) {
       showToast(res.message, 'success');
-      await loadSiswaList();
+      await loadSiswaList(true);
       renderSiswaTable(appState.siswaList);
     } else {
       showToast(res.message, 'error');
@@ -621,11 +710,126 @@ function confirmDeleteSiswa(noInduk) {
   };
 }
 
+function openImportExcelModal(parentEl, role) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal">
+      <div class="modal-header"><h3>Impor Data Siswa dari Excel</h3><button class="icon-btn" id="im-close">✕</button></div>
+      <p class="text-secondary mb-md">
+        Gunakan <a href="#" id="im-template-link">Template Excel</a> agar kolom No. Induk &amp; NISN tersimpan sebagai teks
+        (angka nol di depan tidak hilang). Data dengan No. Induk yang sudah ada akan <strong>diperbarui</strong>,
+        yang belum ada akan <strong>ditambahkan</strong>.
+      </p>
+      <div class="dropzone" id="im-dropzone">
+        <div class="dz-icon">📊</div>
+        <div id="im-filename">Klik atau seret file .xlsx di sini</div>
+        <input type="file" id="im-file" accept=".xlsx,.xls" class="hidden">
+      </div>
+      <div id="im-preview"></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('im-close').onclick = () => overlay.remove();
+  document.getElementById('im-template-link').onclick = (e) => { e.preventDefault(); downloadTemplateExcel(); };
+
+  const dz = document.getElementById('im-dropzone');
+  const fileInput = document.getElementById('im-file');
+  dz.onclick = () => fileInput.click();
+  ['dragover'].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add('drag-over'); }));
+  ['dragleave', 'drop'].forEach(evt => dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove('drag-over'); }));
+  dz.addEventListener('drop', e => { if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+  fileInput.onchange = () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); };
+
+  async function handleFile(file) {
+    document.getElementById('im-filename').textContent = file.name;
+    showLoading(true);
+    let parsed;
+    try {
+      parsed = await parseExcelFile(file);
+    } catch (e) {
+      showLoading(false);
+      showToast('Gagal membaca file Excel: ' + e.message, 'error');
+      return;
+    }
+    showLoading(false);
+
+    const preview = document.getElementById('im-preview');
+    if (parsed.missingColumns && parsed.missingColumns.length) {
+      preview.innerHTML = `<div class="card mt-md"><p class="text-secondary">Kolom wajib tidak ditemukan di file: <strong>${parsed.missingColumns.join(', ')}</strong>. Gunakan Template Excel agar nama kolom sesuai.</p></div>`;
+      return;
+    }
+    if (parsed.rows.length === 0) {
+      preview.innerHTML = `<div class="card mt-md"><p class="text-secondary">Tidak ada baris data yang terbaca dari file ini.</p></div>`;
+      return;
+    }
+
+    preview.innerHTML = `
+      <div class="card mt-md">
+        <p class="mb-sm"><strong>${parsed.rows.length}</strong> baris siap diimpor.</p>
+        ${parsed.unmappedHeaders.length ? `<p class="text-sm text-secondary mb-sm">Kolom diabaikan (tidak dikenali): ${parsed.unmappedHeaders.join(', ')}</p>` : ''}
+        <div class="table-wrap mb-md" style="max-height:220px;overflow-y:auto">
+          <table class="data-table">
+            <thead><tr><th>No. Induk</th><th>Nama</th><th>NISN</th><th>Kelas</th><th>Ekstrakurikuler</th></tr></thead>
+            <tbody>
+              ${parsed.rows.slice(0, 8).map(r => `<tr><td class="cell-mono">${escapeHtml(r.noInduk)}</td><td>${escapeHtml(r.nama)}</td><td class="cell-mono">${escapeHtml(r.nisn)}</td><td>${escapeHtml(r.kelas)}</td><td>${escapeHtml(r.ekstrakurikuler)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        ${parsed.rows.length > 8 ? `<p class="text-sm text-secondary mb-md">...dan ${parsed.rows.length - 8} baris lainnya.</p>` : ''}
+        <label class="flex items-center gap-sm mb-md">
+          <input type="checkbox" id="im-buat-akun" checked>
+          Buatkan akun otomatis (username = No. Induk, password = NISN) untuk siswa yang diimpor
+        </label>
+        <button class="btn btn-primary btn-block" id="im-submit">Impor ${parsed.rows.length} Siswa</button>
+        <div id="im-result" class="mt-md"></div>
+      </div>
+    `;
+
+    document.getElementById('im-submit').onclick = async () => {
+      const btn = document.getElementById('im-submit');
+      btn.disabled = true; btn.textContent = 'Mengimpor...';
+      const buatAkunOtomatis = document.getElementById('im-buat-akun').checked;
+      const res = await api('adminBulkUpsertSiswa', { siswaList: parsed.rows, buatAkunOtomatis });
+      btn.disabled = false; btn.textContent = `Impor ${parsed.rows.length} Siswa`;
+
+      const resultBox = document.getElementById('im-result');
+      if (!res.success) {
+        resultBox.innerHTML = `<p class="text-secondary">${escapeHtml(res.message)}</p>`;
+        return;
+      }
+      showToast(res.message, 'success');
+      resultBox.innerHTML = `
+        <div class="flex gap-sm mb-sm" style="flex-wrap:wrap">
+          <span class="chip chip-success">${res.dibuat} ditambahkan</span>
+          <span class="chip chip-neutral">${res.diperbarui} diperbarui</span>
+          ${res.akunDibuat ? `<span class="chip chip-success">${res.akunDibuat} akun dibuat</span>` : ''}
+          ${res.errors && res.errors.length ? `<span class="chip chip-warning">${res.errors.length} baris dilewati</span>` : ''}
+        </div>
+        ${res.errors && res.errors.length ? `<div class="text-sm text-secondary" style="max-height:120px;overflow-y:auto">${res.errors.map(e => escapeHtml(e)).join('<br>')}</div>` : ''}
+        <button class="btn btn-outline btn-block mt-md" id="im-done">Selesai</button>
+      `;
+      document.getElementById('im-done').onclick = async () => {
+        overlay.remove();
+        await loadSiswaList(true);
+        const freshAkun = await api('adminListAkunSiswa', { _fresh: true });
+        if (freshAkun.success) SWR.write('akunSiswa', freshAkun);
+        navigateAdmin('siswa', role);
+      };
+    };
+  }
+}
+
 // -------- KELOLA AKUN (Siswa + Staff) --------
 async function renderAkunSection(el, role) {
-  el.innerHTML = `<div class="flex items-center gap-sm text-secondary"><div class="spinner" style="width:18px;height:18px;border-width:2px"></div> Memuat data akun...</div>`;
-  const res = await api('adminListAkunSiswa', {});
-  if (!res.success) { el.innerHTML = errorBox(res.message); return; }
+  if (!el.innerHTML) el.innerHTML = loadingRow('Memuat data akun...');
+  await SWR.load('akunSiswa', 'adminListAkunSiswa', {}, async (res) => {
+    if (!res.success) { el.innerHTML = errorBox(res.message); return; }
+    await renderAkunBody(el, role, res);
+  });
+}
+
+async function renderAkunBody(el, role, res) {
   appState.akunList = res.list;
   appState.belumPunyaAkun = res.belumPunyaAkun;
 
@@ -659,45 +863,91 @@ async function renderAkunSection(el, role) {
     ${role === 'admin' ? await renderStaffAkunCardHtml() : ''}
   `;
 
-  document.getElementById('ak-bulk').onclick = openBulkCreateModal;
+  document.getElementById('ak-bulk').onclick = () => openBulkCreateModal(el, role);
   el.querySelectorAll('[data-toggle]').forEach(b => {
     b.onclick = async () => {
       const newStatus = b.dataset.status === 'Aktif' ? 'Nonaktif' : 'Aktif';
       showLoading(true);
       const res = await api('adminSetAkunStatus', { noInduk: b.dataset.toggle, status: newStatus });
       showLoading(false);
-      if (res.success) { showToast(res.message, 'success'); renderAkunSection(el, role); }
+      if (res.success) { showToast(res.message, 'success'); refreshAkunAndRender(el, role); }
       else showToast(res.message, 'error');
     };
   });
 
-  if (role === 'admin') bindStaffAkunEvents(el);
+  if (role === 'admin') bindStaffAkunEvents(el, role);
 }
 
-function openBulkCreateModal() {
+async function refreshAkunAndRender(el, role) {
+  const fresh = await api('adminListAkunSiswa', { _fresh: true });
+  if (fresh.success) SWR.write('akunSiswa', fresh);
+  renderAkunSection(el, role);
+}
+
+function openBulkCreateModal(el, role) {
+  const candidates = appState.belumPunyaAkun;
+  const kelasList = Array.from(new Set(candidates.map(s => s.kelas).filter(Boolean))).sort();
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal">
       <div class="modal-header"><h3>Buat Akun Massal</h3><button class="icon-btn" id="bk-close">✕</button></div>
       <p class="text-secondary mb-md">Pilih siswa yang akan dibuatkan akun. Username = No. Induk, Password = NISN.</p>
-      <div style="max-height:320px;overflow-y:auto;border:1px solid var(--border-hairline);border-radius:var(--radius);padding:var(--space-sm)">
-        <label class="flex items-center gap-sm mb-sm"><input type="checkbox" id="bk-all"> <strong>Pilih Semua</strong></label>
-        ${appState.belumPunyaAkun.map(s => `
-          <label class="flex items-center gap-sm mb-sm">
+      <div class="field-row mb-sm">
+        <div class="field" style="margin-bottom:0">
+          <input class="input" id="bk-search" placeholder="Cari nama / No. Induk...">
+        </div>
+        <div class="field" style="margin-bottom:0;max-width:160px">
+          <select class="input" id="bk-kelas">
+            <option value="">Semua Kelas</option>
+            ${kelasList.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="flex items-center justify-between mb-sm">
+        <label class="flex items-center gap-sm"><input type="checkbox" id="bk-all"> <strong>Pilih Semua (hasil tampilan)</strong></label>
+        <span class="text-sm text-secondary" id="bk-count">0 siswa dipilih</span>
+      </div>
+      <div style="max-height:320px;overflow-y:auto;border:1px solid var(--border-hairline);border-radius:var(--radius);padding:var(--space-sm)" id="bk-list">
+        ${candidates.map(s => `
+          <label class="flex items-center gap-sm mb-sm bk-row" data-nama="${escapeHtml(s.nama.toLowerCase())}" data-noinduk="${escapeHtml(s.noInduk)}" data-kelas="${escapeHtml(s.kelas || '')}">
             <input type="checkbox" class="bk-item" value="${s.noInduk}">
             ${escapeHtml(s.nama)} · <span class="mono text-sm">${escapeHtml(s.noInduk)}</span> · ${escapeHtml(s.kelas)}
           </label>
-        `).join('')}
+        `).join('') || '<p class="text-secondary text-sm">Semua siswa sudah punya akun.</p>'}
       </div>
-      <button class="btn btn-primary btn-block mt-md" id="bk-submit">Buat Akun Terpilih</button>
+      <button class="btn btn-primary btn-block mt-md" id="bk-submit" ${candidates.length ? '' : 'disabled'}>Buat Akun Terpilih</button>
     </div>
   `;
   document.body.appendChild(overlay);
   document.getElementById('bk-close').onclick = () => overlay.remove();
+
+  function visibleRows() {
+    return Array.from(overlay.querySelectorAll('.bk-row')).filter(r => r.style.display !== 'none');
+  }
+  function updateCount() {
+    document.getElementById('bk-count').textContent = overlay.querySelectorAll('.bk-item:checked').length + ' siswa dipilih';
+  }
+  function applyFilter() {
+    const q = document.getElementById('bk-search').value.trim().toLowerCase();
+    const kelas = document.getElementById('bk-kelas').value;
+    overlay.querySelectorAll('.bk-row').forEach(row => {
+      const match = (!q || row.dataset.nama.includes(q) || row.dataset.noinduk.includes(q)) && (!kelas || row.dataset.kelas === kelas);
+      row.style.display = match ? '' : 'none';
+    });
+    document.getElementById('bk-all').checked = false;
+  }
+
+  let debounce;
+  document.getElementById('bk-search').oninput = () => { clearTimeout(debounce); debounce = setTimeout(applyFilter, 200); };
+  document.getElementById('bk-kelas').onchange = applyFilter;
   document.getElementById('bk-all').onchange = (e) => {
-    overlay.querySelectorAll('.bk-item').forEach(cb => cb.checked = e.target.checked);
+    visibleRows().forEach(row => { row.querySelector('.bk-item').checked = e.target.checked; });
+    updateCount();
   };
+  overlay.querySelectorAll('.bk-item').forEach(cb => cb.onchange = updateCount);
+
   document.getElementById('bk-submit').onclick = async () => {
     const selected = Array.from(overlay.querySelectorAll('.bk-item:checked')).map(cb => cb.value);
     if (!selected.length) return showToast('Pilih minimal satu siswa.', 'error');
@@ -707,7 +957,7 @@ function openBulkCreateModal() {
     overlay.remove();
     if (res.success) {
       showToast(res.message, 'success');
-      navigateAdmin('akun');
+      refreshAkunAndRender(el, role);
     } else showToast(res.message, 'error');
   };
 }
@@ -747,24 +997,24 @@ async function renderStaffAkunCardHtml() {
   `;
 }
 
-function bindStaffAkunEvents(el) {
+function bindStaffAkunEvents(el, role) {
   const addBtn = document.getElementById('st-add');
-  if (addBtn) addBtn.onclick = () => openStaffModal(null, el);
+  if (addBtn) addBtn.onclick = () => openStaffModal(null, el, role);
   el.querySelectorAll('[data-st-edit]').forEach(b => b.onclick = () => {
     const s = appState.staffList.find(x => x.username === b.dataset.stEdit);
-    openStaffModal(s, el);
+    openStaffModal(s, el, role);
   });
   el.querySelectorAll('[data-st-toggle]').forEach(b => b.onclick = async () => {
     const newStatus = b.dataset.stStatus === 'Aktif' ? 'Nonaktif' : 'Aktif';
     showLoading(true);
     const res = await api('adminSetStaffStatus', { username: b.dataset.stToggle, status: newStatus });
     showLoading(false);
-    if (res.success) { showToast(res.message, 'success'); navigateAdmin('akun'); }
+    if (res.success) { showToast(res.message, 'success'); refreshAkunAndRender(el, role); }
     else showToast(res.message, 'error');
   });
 }
 
-function openStaffModal(staff, parentEl) {
+function openStaffModal(staff, parentEl, role) {
   const isEdit = !!staff;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -805,44 +1055,45 @@ function openStaffModal(staff, parentEl) {
     if (res.success) {
       showToast(res.message, 'success');
       overlay.remove();
-      navigateAdmin('akun');
+      refreshAkunAndRender(parentEl, role);
     } else showToast(res.message, 'error');
   };
 }
 
 // -------- LAPORAN & GRAFIK --------
 async function renderLaporanSection(el, role) {
-  el.innerHTML = `<div class="flex items-center gap-sm text-secondary"><div class="spinner" style="width:18px;height:18px;border-width:2px"></div> Memuat laporan...</div>`;
-  const res = await api('adminLaporan', {});
-  if (!res.success) { el.innerHTML = errorBox(res.message); return; }
-  const rekap = res.rekap;
-  const maxVal = Math.max(1, ...rekap.map(r => r.jumlahSiswa));
-
-  el.innerHTML = `
-    <div class="card mb-lg">
-      <h3 class="mb-md">Rekap Peserta per Ekstrakurikuler</h3>
-      <div class="flex flex-col gap-sm" style="display:flex;flex-direction:column;gap:12px">
-        ${rekap.map(r => `
-          <div>
-            <div class="flex justify-between text-sm mb-sm"><span>${escapeHtml(r.ekstrakurikuler)}</span><strong>${r.jumlahSiswa} siswa</strong></div>
-            <div style="height:10px;background:var(--surface-1);border-radius:999px;overflow:hidden;">
-              <div style="height:100%;width:${(r.jumlahSiswa / maxVal) * 100}%;background:var(--electric-blue);"></div>
+  const renderBody = (res) => {
+    if (!res.success) { el.innerHTML = errorBox(res.message); return; }
+    const rekap = res.rekap;
+    const maxVal = Math.max(1, ...rekap.map(r => r.jumlahSiswa));
+    el.innerHTML = `
+      <div class="card mb-lg">
+        <h3 class="mb-md">Rekap Peserta per Ekstrakurikuler</h3>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          ${rekap.map(r => `
+            <div>
+              <div class="flex justify-between text-sm mb-sm"><span>${escapeHtml(r.ekstrakurikuler)}</span><strong>${r.jumlahSiswa} siswa</strong></div>
+              <div style="height:10px;background:var(--surface-1);border-radius:999px;overflow:hidden;">
+                <div style="height:100%;width:${(r.jumlahSiswa / maxVal) * 100}%;background:var(--electric-blue);"></div>
+              </div>
             </div>
-          </div>
-        `).join('') || '<p class="text-secondary">Belum ada data.</p>'}
+          `).join('') || '<p class="text-secondary">Belum ada data.</p>'}
+        </div>
       </div>
-    </div>
 
-    <div class="card">
-      <h3 class="mb-md">Tabel Rekap</h3>
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead><tr><th>Ekstrakurikuler</th><th>Jumlah Siswa</th><th>Kartu Terunggah</th></tr></thead>
-          <tbody>
-            ${rekap.map(r => `<tr><td>${escapeHtml(r.ekstrakurikuler)}</td><td>${r.jumlahSiswa}</td><td>${r.jumlahKartu}</td></tr>`).join('') || `<tr><td colspan="3" class="table-empty">Belum ada data.</td></tr>`}
-          </tbody>
-        </table>
+      <div class="card">
+        <h3 class="mb-md">Tabel Rekap</h3>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Ekstrakurikuler</th><th>Jumlah Siswa</th><th>Kartu Terunggah</th></tr></thead>
+            <tbody>
+              ${rekap.map(r => `<tr><td>${escapeHtml(r.ekstrakurikuler)}</td><td>${r.jumlahSiswa}</td><td>${r.jumlahKartu}</td></tr>`).join('') || `<tr><td colspan="3" class="table-empty">Belum ada data.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
-  `;
+    `;
+  };
+  if (!el.innerHTML) el.innerHTML = loadingRow('Memuat laporan...');
+  await SWR.load('laporan', 'adminLaporan', {}, renderBody);
 }
