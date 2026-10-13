@@ -9,5 +9,5 @@ const GAS_URL = 'https://script.google.com/macros/s/AKfycbxfbeGLVlrkslTK4kJ2C6kd
 const APP_INFO = {
   name: 'SIKARTU-EKSKUL',
   school: 'SMAN 1 Kamal Bangkalan',
-  year: '2024/2025'
+  year: '2026/2027'
 };
