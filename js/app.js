@@ -480,7 +480,7 @@ async function renderUploadSection(el, role) {
         <label>Pilih Siswa</label>
         <select class="input" id="up-siswa">
           <option value="">— Pilih siswa —</option>
-          ${res.list.map(s => `<option value="${s.noInduk}">${escapeHtml(s.nama)} · ${escapeHtml(s.noInduk)} · ${escapeHtml(s.kelas)} ${s.adaKartu ? '(sudah ada kartu)' : ''}</option>`).join('')}
+          ${appState.siswaList.map(s => `<option value="${s.noInduk}">${escapeHtml(s.nama)} · ${escapeHtml(s.noInduk)} · ${escapeHtml(s.kelas)} ${s.adaKartu ? '(sudah ada kartu)' : ''}</option>`).join('')}
         </select>
       </div>
       <div class="field">
