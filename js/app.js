@@ -207,8 +207,15 @@ function renderSiswaShell() {
 }
 
 async function loadKartuSaya() {
-  const res = await api('getKartuSaya');
   const wrap = document.getElementById('kartu-wrap');
+  let res;
+  try {
+    res = await api('getKartuSaya');
+  } catch (e) {
+    console.error('[loadKartuSaya] Gagal memuat kartu:', e);
+    wrap.innerHTML = `<div class="card"><p class="text-secondary">Gagal memuat kartu: ${escapeHtml(e.message || String(e))}</p></div>`;
+    return;
+  }
   if (!res.success) {
     wrap.innerHTML = `
       <div class="card">
@@ -408,18 +415,35 @@ function setActiveNav(sectionId, label) {
   document.getElementById('topbar-title').textContent = label;
 }
 
-function navigateAdmin(section, role) {
+async function navigateAdmin(section, role) {
   role = role || Session.get().role;
   appState.currentSection = section;
   const contentArea = document.getElementById('admin-content');
   const nav = ADMIN_NAV.find(n => n.id === section);
   setActiveNav(section, nav ? nav.label : section);
 
-  if (section === 'dashboard') return renderDashboardSection(contentArea, role);
-  if (section === 'upload') return renderUploadSection(contentArea, role);
-  if (section === 'siswa') return renderDataSiswaSection(contentArea, role);
-  if (section === 'akun') return renderAkunSection(contentArea, role);
-  if (section === 'laporan') return renderLaporanSection(contentArea, role);
+  // Konten LAMA sengaja dikosongkan dulu sebelum render baru dimulai —
+  // supaya kalau terjadi error, yang terlihat adalah pesan error, bukan
+  // halaman menu sebelumnya yang membingungkan (seolah tombol "tidak berfungsi").
+  contentArea.innerHTML = loadingRow('Memuat...');
+
+  try {
+    if (section === 'dashboard') return await renderDashboardSection(contentArea, role);
+    if (section === 'upload') return await renderUploadSection(contentArea, role);
+    if (section === 'siswa') return await renderDataSiswaSection(contentArea, role);
+    if (section === 'akun') return await renderAkunSection(contentArea, role);
+    if (section === 'laporan') return await renderLaporanSection(contentArea, role);
+  } catch (e) {
+    console.error('[navigateAdmin] Gagal merender menu "' + section + '":', e);
+    contentArea.innerHTML = `
+      <div class="card">
+        <h3 class="mb-sm">Gagal memuat halaman ini</h3>
+        <p class="text-secondary mb-md">${escapeHtml(e.message || String(e))}</p>
+        <button class="btn btn-outline" id="nav-retry">Coba Lagi</button>
+      </div>`;
+    const retryBtn = document.getElementById('nav-retry');
+    if (retryBtn) retryBtn.onclick = () => navigateAdmin(section, role);
+  }
 }
 
 // -------- DASHBOARD --------
